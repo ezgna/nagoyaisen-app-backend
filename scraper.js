@@ -1,25 +1,59 @@
 const puppeteer = require('puppeteer');
 
-async function scrapeLogin(username, password) {
-  const browser = await puppeteer.launch({headless: false});
-  console.log("Browser launched");
+async function login(username, password) {
+  let loginSuccess = false;
+  let page = null;
+  try {
+    const browser = await puppeteer.launch({headless: false});
+    page = await browser.newPage();
+    await page.goto('https://portal.nkz.ac.jp/portal/login.do', { waitUntil: 'networkidle0' });
 
-  const page = await browser.newPage();
-  await page.goto('https://portal.nkz.ac.jp/portal/top.do', { waitUntil: 'networkidle0' });
-  console.log("Page loaded");
+    const loginSuccessPromise = page.waitForResponse(response => 
+      response.url().includes('/portal/login.do') && response.status() === 302
+    );
 
-  await page.type('#userId', username);
-  await page.type('#password', password);
-  await page.click('#loginButton');
-  await page.waitForNavigation({ waitUntil: 'networkidle0' });
-  console.log("Logged in");
+    const loginErrorPromise = page.waitForResponse(response => 
+      response.url().endsWith('/portal/img/design01/under_l_red.png') && response.status() === 200
+    ).then(() => {
+      throw new Error("Login failed");
+    });
 
+    await page.type('#userId', username);
+    await page.type('#password', password);
+    console.log("Clicking login button...");
+    await page.click('#loginButton');
+    await page.waitForNavigation({ waitUntil: 'networkidle0' });
+
+    await Promise.race([loginSuccessPromise, loginErrorPromise]);
+
+    console.log("Login successful");
+    loginSuccess = true;
+    return { isLoggedIn: true, page };
+
+  } catch (error) {
+    // loginSuccessPromiseがrejectされた場合、ここでエラー処理を行う
+    console.error("Login failed:", error);
+    return { isLoggedIn: false };
+  } finally {
+    if (!loginSuccess && page) {
+      await page.close();
+    }
+  }
+}
+
+async function scrapeContent(page) {
   let allDetails = [];
 
   for (let i = 0; i <= 9; i++) {
     // 各リンクのIDを生成
     const linkId = `#link_${i}`;
-    console.log(`Clicking ${linkId}`);
+    console.log(`Checking existence of ${linkId}`);
+
+    const linkExists = await page.$(linkId) !== null;
+    if (!linkExists) {
+      console.log(`No element found for selector: ${linkId}, skipping...`);
+      continue; // 要素が存在しない場合は、次のイテレーションに進む
+    }
 
     await page.click(linkId);
     console.log(`Open the content page for ${linkId}`);
@@ -89,7 +123,6 @@ async function scrapeLogin(username, password) {
   }
 
   console.log("All contents are scraped");
-  // await browser.close();
   return allDetails;
 
 }
@@ -110,10 +143,9 @@ function cleanDateTime(datetime) {
   return cleanedDatetime;
 }
 
-module.exports = scrapeLogin;
+module.exports = { login, scrapeContent };
 
-// nis21074
-// #B19980810
+// scrapeLogin("nis21074", "#B19980810");
 
 
 

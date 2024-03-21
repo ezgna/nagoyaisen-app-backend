@@ -1,51 +1,38 @@
 const express = require('express');
-const bodyParser = require('body-parser');
 const cors = require('cors');
-const scrapeLogin = require('./scraper'); // scraper.jsから関数をインポート
+const { login, scrapeContent } = require('./scraper');
+const db = require('./firebaseAdminInit');
 
 const app = express();
 const port = 3001;
 
-app.use(bodyParser.json());
+app.use(express.json());
 app.use(cors());
 
 app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   try {
-    const content = await scrapeLogin(username, password); // スクレイピング関数を呼び出し
-    res.json({ message: 'ログイン成功', content });
-  } catch (error) {
-    console.error('ログインに失敗しました', error);
-    res.status(500).json({ message: 'ログインに失敗しました' });
+    const { isLoggedIn, page } = await login(username, password);
+    if (isLoggedIn) {
+      try {
+        const content = await scrapeContent(page);
+        const docRef = db.collection('scrapedData').doc('latest');
+        await docRef.set({ content });
+        // スクレイピングの結果をデータベースに保存後に成功レスポンスを送信
+        res.json({ message: 'login success' });
+      } catch (scrapeError) {
+        console.error('failed to scrape', scrapeError);
+        res.status(500).json({ message: 'Internal Server Error' });
+      }
+    } else {
+      res.status(401).json({ message: 'Unauthorized' });
+    }
+  } catch (loginError) {
+    console.error('login failed', loginError);
+    res.status(500).json({ message: 'Internal Server Error' });
   }
 });
 
 app.listen(port, () => {
   console.log(`Server listening at http://localhost:${port}`);
 });
-
-
-
-// const express = require('express'); // Expressライブラリをインポート
-// const app = express(); // アプリケーションインスタンスを作成
-// const port = 3001; // サーバーのポート番号を指定
-
-
-// app.use(bodyParser.json());
-
-// app.post('/api/login', async (req, res) => {
-//   const { username, password } = req.body;
-//   try {
-//     const browser = await
-//   }
-// })
-
-// // ルートパスに対するGETリクエストを処理
-// app.get('/', (req, res) => {
-//   res.send('Hello World!'); // レスポンスとして文字列を返す
-// });
-
-// // 指定したポートでサーバーを起動
-// app.listen(port, () => {
-//   console.log(`Server listening at http://localhost:${port}`);
-// });
