@@ -1,10 +1,13 @@
-const puppeteer = require('puppeteer');
+import puppeteer from 'puppeteer';
+import https from 'https';
+import { uploadStream } from '../firebase/firebaseAdminInit.js';
 
 async function login(username, password) {
   let browser = null;
   let loginSuccess = false;
   try {
     browser = await puppeteer.launch({headless: true});
+
     const page = await browser.newPage();
     await page.goto('https://portal.nkz.ac.jp/portal/login.do', { waitUntil: 'networkidle0' });
 
@@ -59,7 +62,7 @@ async function scrapeContent(page, browser) {
       let data = {
         sender: "",
         title: "",
-        content: "",
+        message: "",
         attachment: "",
         datetime: ""
       };
@@ -70,20 +73,37 @@ async function scrapeContent(page, browser) {
       labels.forEach(label => {
         // labelの次の兄弟要素（.line_y_label）を飛ばし、その次の兄弟要素（目的の.item）を取得
         const nextItem = label.nextElementSibling ? label.nextElementSibling.nextElementSibling : null;
-        
+
         if (nextItem && nextItem.classList.contains('item')) {
           // ラベルのテキスト内容に応じてdataオブジェクトに情報を保存
           const labelMappings = {
             "送信者": "sender",
             "タイトル": "title",
-            "本文": "content",
+            "本文": "message",
             "添付ファイル": "attachment",
             "掲示期間": "datetime"
           };
         
           const labelKey = label.textContent.trim();
+
           if (labelMappings.hasOwnProperty(labelKey)) {
-            data[labelMappings[labelKey]] = nextItem.innerHTML.trim();
+
+            if (labelKey === "添付ファイル") {
+              const name = nextItem.querySelector('a').textContent.trim();
+              const hrefValue = nextItem.querySelector('a').getAttribute('href');
+              const match = hrefValue.match(/'(.+?)'/);
+              const link = match ? match[1] : null;
+              if (link && name) {
+                data[labelMappings[labelKey]] = {
+                  name: name,
+                  link: link
+                };
+              } else {
+                console.error("Failed to extract download information for attachment:", fileName);
+              }
+            } else {
+              data[labelMappings[labelKey]] = nextItem.innerHTML.trim();
+            }
           }
         }
       });
@@ -91,11 +111,27 @@ async function scrapeContent(page, browser) {
       return data;
     });
 
+
+
+    const cookies = await page.cookies();
+
+    if (rawDetails.attachment && rawDetails.attachment.link) {
+        const baseUrl = 'https://portal.nkz.ac.jp/portal/'
+        const relativeUrl = rawDetails.attachment.link.replace('./', '');
+        const absoluteUrl = baseUrl + relativeUrl;
+        const destinationPath = `uploads/${rawDetails.attachment.name}`; // 保存先のパスを適切に設定
+        const publicUrl = await downloadAndUploadFile(absoluteUrl, destinationPath, cookies);
+        rawDetails.attachment.link = publicUrl;
+    }
+
+
+
+
     const details = {
       sender: rawDetails.sender,
       title: cleanHtmlAndWhitespace(rawDetails.title),
-      content: cleanHtmlAndWhitespace(rawDetails.content),
-      attachment: cleanHtmlAndWhitespace(rawDetails.attachment),
+      message: cleanHtmlAndWhitespace(rawDetails.message),
+      attachment: rawDetails.attachment,
       datetime: cleanDateTime(rawDetails.datetime)
     }
 
@@ -109,7 +145,6 @@ async function scrapeContent(page, browser) {
   console.log("All contents are scraped");
   await browser.close();
   return allDetails;
-
 }
 
 function cleanHtmlAndWhitespace(text) {
@@ -128,9 +163,41 @@ function cleanDateTime(datetime) {
   return cleanedDatetime;
 }
 
-module.exports = { login, scrapeContent };
+import fs from 'fs';
 
-// scrapeLogin("nis21074", "#B19980810");
+const ca = fs.readFileSync('./certificates/complete-chain.pem');
 
+const agent = new https.Agent({
+  ca: ca
+});
 
+async function downloadAndUploadFile(url, destination, cookies) {
+  const fetch = (await import('node-fetch')).default;
+  const sessionIdCookie = cookies.find(cookie => cookie.name === 'JSESSIONID');
+  if (!sessionIdCookie) {
+    throw new Error('Failed to get JSESSIONID cookie');
+  }
 
+  const headers = {
+    'Cookie': `JSESSIONID=${sessionIdCookie.value}`,
+  };
+
+  const response = await fetch(url, {
+    headers,
+    agent
+  });
+  if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.statusText}`);
+  const stream = response.body;
+
+  try {
+    const publicUrl = await uploadStream(stream, destination);
+    console.log(`File is available at ${publicUrl}`);
+    return publicUrl;
+
+  } catch (error) {
+    console.error('Error uploading file or saving to database:', error);
+    throw error;
+  }
+}
+
+export { login, scrapeContent };
