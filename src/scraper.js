@@ -2,6 +2,7 @@ import puppeteer from 'puppeteer';
 import https from 'https';
 import { uploadStream } from '../firebase/firebaseAdminInit.js';
 
+
 async function login(username, password) {
   let browser = null;
   let loginSuccess = false;
@@ -30,7 +31,8 @@ async function login(username, password) {
 
     console.log("Login successful");
     loginSuccess = true;
-    return { isLoggedIn: true, page, browser };
+    const isenCookies = await page.cookies();
+    return { isLoggedIn: true, browser, page, isenCookies };
 
   } catch (error) {
     console.error("Login failed:", error);
@@ -42,7 +44,7 @@ async function login(username, password) {
   }
 }
 
-async function scrapeContent(page, browser) {
+async function scrapeContent(browser, page, isenCookies, sessionId) {
   let allDetails = [];
 
   for (let i = 0; i <= 9; i++) {
@@ -113,14 +115,14 @@ async function scrapeContent(page, browser) {
 
 
 
-    const cookies = await page.cookies();
+    // const cookies = await page.cookies();
 
     if (rawDetails.attachment && rawDetails.attachment.link) {
         const baseUrl = 'https://portal.nkz.ac.jp/portal/'
         const relativeUrl = rawDetails.attachment.link.replace('./', '');
         const absoluteUrl = baseUrl + relativeUrl;
-        const destinationPath = `uploads/${rawDetails.attachment.name}`; // 保存先のパスを適切に設定
-        const publicUrl = await downloadAndUploadFile(absoluteUrl, destinationPath, cookies);
+        const destinationPath = `${rawDetails.attachment.name}`; // 保存先のパスを適切に設定
+        const publicUrl = await downloadAndUploadFile(absoluteUrl, destinationPath, isenCookies, sessionId);
         rawDetails.attachment.link = publicUrl;
     }
 
@@ -171,15 +173,15 @@ const agent = new https.Agent({
   ca: ca
 });
 
-async function downloadAndUploadFile(url, destination, cookies) {
+async function downloadAndUploadFile(url, destination, isenCookies, sessionId) {
   const fetch = (await import('node-fetch')).default;
-  const sessionIdCookie = cookies.find(cookie => cookie.name === 'JSESSIONID');
-  if (!sessionIdCookie) {
+  const isenCookie = isenCookies.find(cookie => cookie.name === 'JSESSIONID');
+  if (!isenCookie) {
     throw new Error('Failed to get JSESSIONID cookie');
   }
 
   const headers = {
-    'Cookie': `JSESSIONID=${sessionIdCookie.value}`,
+    'Cookie': `JSESSIONID=${isenCookie.value}`,
   };
 
   const response = await fetch(url, {
@@ -190,7 +192,7 @@ async function downloadAndUploadFile(url, destination, cookies) {
   const stream = response.body;
 
   try {
-    const publicUrl = await uploadStream(stream, destination);
+    const publicUrl = await uploadStream(stream, destination, sessionId);
     console.log(`File is available at ${publicUrl}`);
     return publicUrl;
 
@@ -200,4 +202,40 @@ async function downloadAndUploadFile(url, destination, cookies) {
   }
 }
 
-export { login, scrapeContent };
+async function checkForTopContent(isenCookies) {
+  const browser = await puppeteer.launch();
+  const page = await browser.newPage();
+
+  // isenCookiesをページに設定
+  await page.setCookie(...isenCookies);
+
+  // ログインが必要なページにアクセス
+  await page.goto('https://portal.nkz.ac.jp/portal/top.do', { waitUntil: 'networkidle0' });
+  
+  // link_0が表示されるまで待機
+  await page.waitForSelector('#link_0', { visible: true });
+
+  // link_0の内部テキストを取得し、cleanHtmlAndWhitespace関数で整形
+  const rawText = await page.evaluate(() => document.querySelector('#link_0').innerText);
+  const cleanedText = cleanHtmlAndWhitespace(rawText);
+
+  // console.log(cleanedText);
+
+  return { topContent: cleanedText, browser, page };
+}
+
+async function checkCookiesValidity(isenCookies) {
+  try {
+    const response = await axios.get('https://portal.nkz.ac.jp/portal/top.do', {
+      headers: {
+        'Cookie': `JSESSIONID=${isenCookies.JSESSIONID}`
+      }
+    });
+    return response.status === 200;
+  } catch (error) {
+    console.error('Failed to validate cookies with axios', error);
+    return false;
+  }
+}
+
+export { login, scrapeContent, checkForTopContent, checkCookiesValidity };

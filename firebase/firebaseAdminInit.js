@@ -16,7 +16,7 @@ function getContentType(filename) {
     case '.png':
       return 'image/png';
     case '.gif':
-      return 'image/gif';
+      return 'image/gif'
     case '.pdf':
       return 'application/pdf';
     case '.xlsx':
@@ -28,11 +28,19 @@ function getContentType(filename) {
   }
 }
 
+function generateUniqueFilename(originalFilename, sessionId) {
+  const timestamp = Date.now();
+  const ext = path.extname(originalFilename);
+  const basename = path.basename(originalFilename, ext);
+  return `${sessionId}/${basename}-${timestamp}${ext}`;
+}
+
 const firestore = admin.firestore();
 const storage = admin.storage();
 const bucket = storage.bucket('gs://nagoyaisen-app.appspot.com');
 
-async function uploadStream(stream, destination) {
+async function uploadStream(stream, originalDestination, sessionId) {
+  const destination = generateUniqueFilename(originalDestination, sessionId);
   return new Promise((resolve, reject) => {
     const file = bucket.file(destination);
 
